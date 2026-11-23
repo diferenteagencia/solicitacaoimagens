@@ -370,8 +370,8 @@
       const measurementAnswer = measurementValue();
       const required = [[$('photoFront').files[0], 'Frontal'], [$('photoSide').files[0], 'Lateral'], [$('photoOverview').files[0], 'Visão geral']];
       const additional = [...($('photoAdditional').files || [])].map((file) => [file, 'Adicional']);
-      const evidences = [];
-      for (const [file, angle] of [...required, ...additional]) if (file) evidences.push(await serializeFile(file, angle));
+      const evidencias = [];
+      for (const [file, angle] of [...required, ...additional]) if (file) evidencias.push(await serializeFile(file, angle));
       const selected = formState.image || {};
       const pdv = formState.pdv || {};
       return {
