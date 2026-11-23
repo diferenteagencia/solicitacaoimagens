@@ -42,7 +42,7 @@
         <p class="muted">As listas abaixo usam somente os PDVs ativos da base e são filtradas na ordem em que você preenche.</p>
         <div class="grid two">
           <label class="required">Estado<select id="state" required disabled><option value="">Selecione</option></select></label>
-          <label class="required">Cidade<select id="city" required disabled><option value="">Selecione o estado primeiro</option></select></label>
+          <label class="required">Cidade<input id="city" type="search" list="cityOptions" placeholder="Digite ou selecione a cidade" autocomplete="off" required disabled><datalist id="cityOptions"></datalist></label>
           <label class="required">Ambiente<select id="environment" required disabled><option value="">Selecione a cidade primeiro</option></select></label>
           <label>Endereço<select id="address" disabled><option value="">Selecione o ambiente primeiro</option></select><small class="help">Opcional. Selecione para filtrar os PDVs por endereço.</small></label>
         </div>
@@ -66,8 +66,7 @@
         <label id="referenceImageLabel">Imagem de referência<select id="referenceImage" disabled><option value="">Selecione a marca e o tipo de demanda primeiro</option></select></label>
         <small class="help" id="imageHelp">Para “Imagem Vencida”, selecione a imagem correspondente à marca.</small>
         <div class="image-preview" id="imagePreview" hidden></div>
-        <label class="required">Local da troca de imagem<input id="changeLocation" type="text" list="locationExamples" placeholder="Ex.: balcão" required disabled></label>
-        <datalist id="locationExamples"><option value="Balcão"><option value="Parede do fundo do caixa"><option value="Provador"><option value="Vitrine"><option value="Parede lateral"><option value="Entrada da loja"><option value="Expositor"><option value="Outro"></datalist>
+        <label class="required">Local da troca de imagem<select id="changeLocation" required disabled><option value="">Selecione</option><option>Balcão</option><option>Parede do fundo do caixa</option><option>Provador</option><option>Vitrine</option><option>Parede lateral</option><option>Entrada da loja</option><option>Expositor</option><option value="Outro">Outro</option></select><input id="changeLocationOther" type="text" placeholder="Digite o local da troca" autocomplete="off" hidden disabled></label>
         <p class="examples">Exemplos: Balcão, Parede do fundo do caixa, Provador, Vitrine, Parede lateral ou Expositor.</p>
       </section>
 
@@ -160,6 +159,17 @@
     function pdvMatches(row, filters) { return Object.entries(filters).every(([key, value]) => !value || text(row[key]) === text(value)); }
     function populate(select, values, placeholder, disabled = false) {
       const current = select.value;
+      if (select.tagName === 'INPUT') {
+        const list = select.list;
+        if (list) list.innerHTML = values.map((item) => {
+          const value = typeof item === 'object' ? item.value : item;
+          const label = typeof item === 'object' ? item.label : item;
+          return `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`;
+        }).join('');
+        select.placeholder = placeholder;
+        select.disabled = disabled || values.length === 0;
+        return;
+      }
       select.innerHTML = `<option value="">${escapeHtml(placeholder)}</option>` + values.map((item) => {
         const value = typeof item === 'object' ? item.value : item;
         const label = typeof item === 'object' ? item.label : item;
@@ -183,10 +193,11 @@
       const address = $('address').value;
       const stateRows = activePdvs.filter((row) => pdvMatches(row, { state }));
       const cityOptions = unique(stateRows.map((row) => row.city));
-      if (city && !cityOptions.includes(city)) $('city').value = '';
+      if (city && $('city').tagName !== 'INPUT' && !cityOptions.includes(city)) $('city').value = '';
       populate($('city'), cityOptions, state ? 'Selecione' : 'Selecione o estado primeiro', !state);
       const currentCity = $('city').value;
-      const cityRows = stateRows.filter((row) => pdvMatches(row, { city: currentCity }));
+      const cityTerm = normalizeSearch(currentCity);
+      const cityRows = stateRows.filter((row) => !cityTerm || normalizeSearch(row.city).includes(cityTerm));
       const environments = unique(cityRows.map((row) => row.environment)).map((value) => ({ value, label: formatLabel(value) }));
       if (environment && !environments.some((item) => item.value === environment)) $('environment').value = '';
       populate($('environment'), environments, currentCity ? 'Selecione' : 'Selecione a cidade primeiro', !currentCity);
@@ -234,6 +245,8 @@
       show('imageCard', Boolean(brand && demandType));
       show('imagePreview', false);
       $('changeLocation').value = '';
+      $('changeLocationOther').value = '';
+      syncChangeLocationControl();
       syncStages();
     }
     function chooseImage() {
@@ -246,6 +259,14 @@
       syncStages();
     }
     function measurementValue() { return document.querySelector('input[name="hasMeasurements"]:checked')?.value || ''; }
+    function changeLocationValue() { return $('changeLocation').value === 'Outro' ? text($('changeLocationOther').value) : text($('changeLocation').value); }
+    function syncChangeLocationControl() {
+      const custom = $('changeLocation').value === 'Outro';
+      show('changeLocationOther', custom);
+      $('changeLocationOther').disabled = !custom || $('changeLocation').disabled;
+      $('changeLocationOther').required = custom && !$('changeLocation').disabled;
+      if (!custom) $('changeLocationOther').value = '';
+    }
     function measurementReady() { const answer = measurementValue(); return answer === 'Não' || (answer === 'Sim' && Number($('width').value) > 0 && Number($('height').value) > 0); }
     function evidenceInputs() { return [$('photoFront'), $('photoSide'), $('photoOverview'), $('photoAdditional')]; }
     function hasRequiredEvidence() { return [$('photoFront'), $('photoSide'), $('photoOverview')].every((input) => input.files?.length); }
@@ -277,7 +298,8 @@
       $('referenceImageLabel').classList.toggle('required', requiresImage);
       const imageReady = demandReady && (!requiresImage || Boolean(formState.image));
       $('changeLocation').disabled = !demandReady;
-      const locationReady = imageReady && Boolean(text($('changeLocation').value));
+      syncChangeLocationControl();
+      const locationReady = imageReady && Boolean(changeLocationValue());
       show('measureCard', locationReady);
       document.querySelectorAll('input[name="hasMeasurements"]').forEach((input) => { input.disabled = !locationReady; input.required = locationReady; });
       syncMeasurementFields();
@@ -310,7 +332,7 @@
         [$('brand').value, 'Selecione a marca.', $('brand')],
         [$('demandType').value, 'Selecione o tipo de demanda.', $('demandType')],
         [$('demandType').value !== 'Imagem Vencida' || formState.image, 'Selecione a imagem de referência.', $('referenceImage')],
-        [text($('changeLocation').value), 'Informe o local da troca de imagem.', $('changeLocation')],
+        [changeLocationValue(), 'Informe o local da troca de imagem.', $('changeLocation')],
         [measurementValue(), 'Informe se possui as medidas.', $('measureCard')],
         [measurementReady(), 'Preencha largura e altura maiores que zero.', $('width')],
         [$('photoFront').files?.length, 'Envie a foto do ângulo frontal.', $('photoFront')],
@@ -347,7 +369,7 @@
         marca: $('brand').value,
         tipoDemanda: $('demandType').value,
         imagemSelecionada: { id: selected.id || '', nome: selected.name || '', marca: selected.brand || $('brand').value, tipoDemanda: selected.type || $('demandType').value, arquivo: selected.sourceFile || '', contentDataUrl: selected.src || '' },
-        localTrocaImagem: text($('changeLocation').value),
+        localTrocaImagem: changeLocationValue(),
         possuiMedidas: measurementAnswer,
         medidas: measurementAnswer === 'Sim' ? { larguraCm: Number($('width').value), alturaCm: Number($('height').value) } : null,
         evidencias
@@ -361,11 +383,13 @@
       ['company','sector'].forEach((id) => $(id).addEventListener('change', () => { profileReady(); refreshLocation(); }));
       $('state').addEventListener('change', () => { $('city').value = ''; $('environment').value = ''; $('address').value = ''; $('pdvSearch').value = ''; formState.pdv = null; refreshLocation(); });
       ['city','environment','address'].forEach((id) => $(id).addEventListener('change', () => { if (id === 'city') { $('environment').value = ''; $('address').value = ''; $('pdvSearch').value = ''; } if (id === 'environment') { $('address').value = ''; $('pdvSearch').value = ''; } if (id === 'address') $('pdvSearch').value = ''; formState.pdv = null; refreshLocation(); }));
+      $('city').addEventListener('input', () => { $('environment').value = ''; $('address').value = ''; $('pdvSearch').value = ''; formState.pdv = null; refreshLocation(); });
       $('pdvSearch').addEventListener('input', () => { if (formState.pdv && $('pdvSearch').value !== displayPdv(formState.pdv)) { formState.pdv = null; $('pdvInfo').textContent = 'Selecione um PDV para liberar os dados da demanda.'; } renderPdvResults(); syncStages(); });
       $('brand').addEventListener('change', () => { $('demandType').value = ''; refreshImageOptions(); syncStages(); });
       $('demandType').addEventListener('change', () => { refreshImageOptions(); syncStages(); });
       $('referenceImage').addEventListener('change', chooseImage);
-      $('changeLocation').addEventListener('input', syncStages);
+      $('changeLocation').addEventListener('change', syncStages);
+      $('changeLocationOther').addEventListener('input', syncStages);
       document.querySelectorAll('input[name="hasMeasurements"]').forEach((input) => input.addEventListener('change', () => { syncMeasurementFields(); syncStages(); }));
       ['width','height'].forEach((id) => $(id).addEventListener('input', syncStages));
       evidenceInputs().forEach((input) => input.addEventListener('change', () => { syncEvidencePreview(); syncStages(); }));
@@ -375,9 +399,13 @@
         const button = $('submitButton'); button.disabled = true; $('status').classList.remove('error'); $('status').textContent = 'Enviando solicitação...';
         try {
           const response = await fetch(FLOW_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(await collectPayload()) });
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          if (!response.ok) {
+            const detail = (await response.text()).trim();
+            console.error('Power Automate recusou a solicitação:', response.status, detail);
+            throw new Error(`HTTP ${response.status}`);
+          }
           showSuccess();
-        } catch (error) { console.error(error); $('status').classList.add('error'); $('status').textContent = 'Não foi possível enviar a solicitação. Tente novamente.'; button.disabled = false; }
+        } catch (error) { console.error(error); $('status').classList.add('error'); $('status').textContent = `Não foi possível enviar a solicitação${error?.message?.startsWith('HTTP ') ? ` (${error.message})` : ''}. Confira o histórico da automação.`; button.disabled = false; }
       });
       $('resetButton').addEventListener('click', () => window.location.reload());
       profileReady();
