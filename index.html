@@ -405,7 +405,7 @@
             throw new Error(`HTTP ${response.status}`);
           }
           showSuccess();
-        } catch (error) { console.error(error); $('status').classList.add('error'); $('status').textContent = `Não foi possível enviar a solicitação${error?.message?.startsWith('HTTP ') ? ` (${error.message})` : ''}. Confira o histórico da automação.`; button.disabled = false; }
+        } catch (error) { console.error(error); $('status').classList.add('error'); $('status').textContent = 'Não foi possível enviar a solicitação. Tente novamente.'; button.disabled = false; }
       });
       $('resetButton').addEventListener('click', () => window.location.reload());
       profileReady();
