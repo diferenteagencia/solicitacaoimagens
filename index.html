@@ -63,8 +63,8 @@
 
       <section class="card" id="imageCard" hidden>
         <h2>Imagem e local da troca</h2>
-        <label class="required">Imagem de referência<select id="referenceImage" required disabled><option value="">Selecione a marca e o tipo de demanda primeiro</option></select></label>
-        <small class="help" id="imageHelp">A imagem será filtrada pela marca e pelo tipo de demanda.</small>
+        <label id="referenceImageLabel">Imagem de referência<select id="referenceImage" disabled><option value="">Selecione a marca e o tipo de demanda primeiro</option></select></label>
+        <small class="help" id="imageHelp">Para “Imagem Vencida”, selecione a imagem correspondente à marca.</small>
         <div class="image-preview" id="imagePreview" hidden></div>
         <label class="required">Local da troca de imagem<input id="changeLocation" type="text" list="locationExamples" placeholder="Ex.: balcão" required disabled></label>
         <datalist id="locationExamples"><option value="Balcão"><option value="Parede do fundo do caixa"><option value="Provador"><option value="Vitrine"><option value="Parede lateral"><option value="Entrada da loja"><option value="Expositor"><option value="Outro"></datalist>
@@ -207,21 +207,30 @@
       if (typeof item === 'string') return { id: `${brand}-${index}`, brand, name: item.split(/[\\/]/).pop(), src: item, type: '' };
       return { id: String(item.id ?? `${brand}-${index}`), brand: item.brand || brand, name: item.name || item.fileName || item.originalFileName || `Imagem ${index + 1}`, src: item.dataUrl || item.src || '', type: item.type || item.tipoDemanda || item.category || '', sourceFile: item.sourceFile || item.fileName || '' };
     }
+    function imageRequiredFor(demandType) { return demandType === 'Imagem Vencida'; }
+    function imageTypeMatches(itemType, demandType) {
+      const itemValue = normalizeSearch(itemType);
+      const demandValue = normalizeSearch(demandType);
+      return !itemValue || itemValue === demandValue || (demandValue === normalizeSearch('Imagem Vencida') && itemValue === normalizeSearch('Vencida'));
+    }
     function imageCatalogFor(brand, demandType) {
       const raw = Array.isArray(IMAGE_CATALOG) ? IMAGE_CATALOG : Object.entries(IMAGE_CATALOG || {}).flatMap(([key, items]) => (Array.isArray(items) ? items : []).map((item) => ({ ...(typeof item === 'object' ? item : { name: item }), brand: item?.brand || key })));
-      const items = raw.map((item, index) => normalizeImageItem(item.brand || brand, item, index)).filter((item) => item.brand === brand);
-      const typed = items.filter((item) => !item.type || item.type === demandType);
+      const items = raw.map((item, index) => normalizeImageItem(item.brand || brand, item, index)).filter((item) => normalizeSearch(item.brand) === normalizeSearch(brand));
+      const typed = items.filter((item) => imageTypeMatches(item.type, demandType));
       return typed.length ? typed : items;
     }
     function refreshImageOptions() {
       const brand = $('brand').value;
       const demandType = $('demandType').value;
       const select = $('referenceImage');
+      const requiresImage = imageRequiredFor(demandType);
       formState.image = null;
-      const items = brand && demandType ? imageCatalogFor(brand, demandType) : [];
-      select.innerHTML = `<option value="">${items.length ? 'Selecione' : 'Nenhuma imagem cadastrada para esta seleção'}</option>` + items.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`).join('');
-      select.disabled = !items.length;
-      $('imageHelp').textContent = items.length ? `${items.length} imagem(ns) disponível(is) para ${brand} / ${demandType}.` : 'A automação precisa injetar as imagens da pasta correspondente para liberar esta etapa.';
+      const items = requiresImage && brand ? imageCatalogFor(brand, demandType) : [];
+      select.innerHTML = `<option value="">${requiresImage ? (items.length ? 'Selecione' : 'Nenhuma imagem disponível para esta marca') : 'Não se aplica a oportunidade'}</option>` + items.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`).join('');
+      select.disabled = !requiresImage || !items.length;
+      select.required = requiresImage;
+      $('referenceImageLabel').classList.toggle('required', requiresImage);
+      $('imageHelp').textContent = requiresImage ? (items.length ? `${items.length} imagem(ns) disponível(is) para ${brand}.` : '') : 'Para oportunidade, não é necessário selecionar uma imagem de referência.';
       show('imageCard', Boolean(brand && demandType));
       show('imagePreview', false);
       $('changeLocation').value = '';
@@ -261,9 +270,13 @@
       $('demandType').disabled = !brandReady;
       if (!brandReady) $('demandType').value = '';
       const demandReady = brandReady && Boolean($('demandType').value);
-      $('referenceImage').disabled = !demandReady || !imageCatalogFor($('brand').value, $('demandType').value).length;
-      const imageReady = demandReady && Boolean(formState.image);
-      $('changeLocation').disabled = !imageReady;
+      const requiresImage = imageRequiredFor($('demandType').value);
+      const imageItems = requiresImage ? imageCatalogFor($('brand').value, $('demandType').value) : [];
+      $('referenceImage').disabled = !requiresImage || !imageItems.length;
+      $('referenceImage').required = requiresImage;
+      $('referenceImageLabel').classList.toggle('required', requiresImage);
+      const imageReady = demandReady && (!requiresImage || Boolean(formState.image));
+      $('changeLocation').disabled = !demandReady;
       const locationReady = imageReady && Boolean(text($('changeLocation').value));
       show('measureCard', locationReady);
       document.querySelectorAll('input[name="hasMeasurements"]').forEach((input) => { input.disabled = !locationReady; input.required = locationReady; });
@@ -296,7 +309,7 @@
         [formState.pdv, 'Selecione o PDV.', $('pdvSearch')],
         [$('brand').value, 'Selecione a marca.', $('brand')],
         [$('demandType').value, 'Selecione o tipo de demanda.', $('demandType')],
-        [formState.image, 'Selecione a imagem de referência.', $('referenceImage')],
+        [$('demandType').value !== 'Imagem Vencida' || formState.image, 'Selecione a imagem de referência.', $('referenceImage')],
         [text($('changeLocation').value), 'Informe o local da troca de imagem.', $('changeLocation')],
         [measurementValue(), 'Informe se possui as medidas.', $('measureCard')],
         [measurementReady(), 'Preencha largura e altura maiores que zero.', $('width')],
