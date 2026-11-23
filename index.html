@@ -95,7 +95,7 @@
           <label class="required">Visão geral<input id="photoOverview" type="file" accept="image/*" disabled required></label>
         </div>
         <label>Imagens adicionais <small>(opcional)</small><input id="photoAdditional" type="file" accept="image/*" multiple disabled></label>
-        <small>Limite de 10 MB por imagem. Formatos aceitos: JPG, JPEG, PNG ou WEBP.</small>
+        <small>Limite de 10 MB por imagem. As fotos são reduzidas automaticamente antes do envio.</small>
         <div class="preview-grid" id="evidencePreview" hidden></div>
       </section>
 
@@ -117,6 +117,8 @@
     const $ = (id) => document.getElementById(id);
     const FLOW_URL = 'https://defaultced99b0d76fe421fb12a1c3eae8ba1.2c.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/11/workflows/feca0ccbaa1e4ff796f7be69c984a93d/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=OeY5E7z5QMnE8kbvBjJotPNMKKdsjd0-O438HWfdhuI';
     const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+    const IMAGE_TARGET_BYTES = 1.5 * 1024 * 1024;
+    const IMAGE_MAX_DIMENSION = 2000;
     const formState = { pdv: null, image: null, responseId: globalThis.crypto?.randomUUID?.() || `demanda-${Date.now()}-${Math.random().toString(16).slice(2)}` };
     let availablePdvRows = [];
     const publishedPdvs = Array.isArray(PDV_DATA) ? PDV_DATA : (PDV_DATA?.pdvs ?? []);
@@ -344,7 +346,26 @@
       return '';
     }
     function fileToDataUrl(file) { return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(new Error(`Não foi possível ler ${file.name}.`)); reader.readAsDataURL(file); }); }
-    async function serializeFile(file, angle) { if (file.size > IMAGE_MAX_BYTES) throw new Error(`A imagem ${file.name} excede o limite de 10 MB.`); return { angle, originalFileName: file.name, mimeType: file.type, size: file.size, contentDataUrl: await fileToDataUrl(file) }; }
+    function dataUrlToImage(dataUrl) { return new Promise((resolve, reject) => { const image = new Image(); image.onload = () => resolve(image); image.onerror = () => reject(new Error('Não foi possível preparar uma das imagens.')); image.src = dataUrl; }); }
+    function canvasToBlob(canvas, type, quality) { return new Promise((resolve, reject) => canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error('Não foi possível comprimir uma das imagens.')), type, quality)); }
+    function blobToDataUrl(blob) { return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(new Error('Não foi possível preparar a imagem comprimida.')); reader.readAsDataURL(blob); }); }
+    async function prepareImage(file) {
+      const originalDataUrl = await fileToDataUrl(file);
+      if (file.size <= IMAGE_TARGET_BYTES) return { fileName: file.name, mimeType: file.type || 'image/jpeg', size: file.size, contentDataUrl: originalDataUrl };
+      const image = await dataUrlToImage(originalDataUrl);
+      const scale = Math.min(1, IMAGE_MAX_DIMENSION / Math.max(image.naturalWidth || image.width, image.naturalHeight || image.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round((image.naturalWidth || image.width) * scale));
+      canvas.height = Math.max(1, Math.round((image.naturalHeight || image.height) * scale));
+      canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+      let quality = 0.84;
+      let blob = await canvasToBlob(canvas, 'image/jpeg', quality);
+      while (blob.size > IMAGE_TARGET_BYTES && quality > 0.5) { quality -= 0.08; blob = await canvasToBlob(canvas, 'image/jpeg', quality); }
+      if (blob.size >= file.size) return { fileName: file.name, mimeType: file.type || 'image/jpeg', size: file.size, contentDataUrl: originalDataUrl };
+      const baseName = file.name.replace(/\.[^.]+$/, '');
+      return { fileName: `${baseName}.jpg`, mimeType: 'image/jpeg', size: blob.size, contentDataUrl: await blobToDataUrl(blob) };
+    }
+    async function serializeFile(file, angle) { if (file.size > IMAGE_MAX_BYTES) throw new Error(`A imagem ${file.name} excede o limite de 10 MB.`); const prepared = await prepareImage(file); return { angle, originalFileName: prepared.fileName, mimeType: prepared.mimeType, size: prepared.size, contentDataUrl: prepared.contentDataUrl }; }
     async function collectPayload() {
       const measurementAnswer = measurementValue();
       const required = [[$('photoFront').files[0], 'Frontal'], [$('photoSide').files[0], 'Lateral'], [$('photoOverview').files[0], 'Visão geral']];
@@ -398,14 +419,17 @@
         if (validationMessage()) return;
         const button = $('submitButton'); button.disabled = true; $('status').classList.remove('error'); $('status').textContent = 'Enviando solicitação...';
         try {
-          const response = await fetch(FLOW_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(await collectPayload()) });
+          const payload = await collectPayload();
+          const payloadText = JSON.stringify(payload);
+          console.info('Solicitação preparada:', { bytes: new Blob([payloadText]).size, evidencias: payload.evidencias?.length || 0 });
+          const response = await fetch(FLOW_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payloadText });
           if (!response.ok) {
             const detail = (await response.text()).trim();
             console.error('Power Automate recusou a solicitação:', response.status, detail);
             throw new Error(`HTTP ${response.status}`);
           }
           showSuccess();
-        } catch (error) { console.error(error); $('status').classList.add('error'); $('status').textContent = 'Não foi possível enviar a solicitação. Tente novamente.'; button.disabled = false; }
+        } catch (error) { console.error(error); $('status').classList.add('error'); const httpCode = error?.message?.match(/^HTTP \d+/)?.[0] || ''; $('status').textContent = `Não foi possível enviar a solicitação${httpCode ? ` (${httpCode})` : ''}. Tente novamente.`; button.disabled = false; }
       });
       $('resetButton').addEventListener('click', () => window.location.reload());
       profileReady();
